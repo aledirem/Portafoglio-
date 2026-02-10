@@ -3,18 +3,15 @@ import pandas as pd
 import yaml
 
 # -------------------------
-# CONFIG STREAMLIT
+# CONFIG
 # -------------------------
-st.set_page_config(
-    page_title="Portfolio Monitor PRO",
-    layout="wide"
-)
+st.set_page_config(page_title="Portfolio Monitor PRO", layout="wide")
 
 # -------------------------
 # LOGIN
 # -------------------------
 def load_users():
-    with open("users.yaml", "r") as f:
+    with open("users.yaml", "r", encoding="utf-8") as f:
         return yaml.safe_load(f)["users"]
 
 users = load_users()
@@ -24,15 +21,13 @@ with st.sidebar:
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
 
+    authenticated = False
     if username and password:
         if username in users and users[username]["password"] == password:
             st.success("Login OK")
             authenticated = True
         else:
             st.error("Credenziali errate")
-            authenticated = False
-    else:
-        authenticated = False
 
 if not authenticated:
     st.stop()
@@ -56,18 +51,31 @@ if uploaded_file is None:
     st.stop()
 
 # -------------------------
-# LETTURA CSV
+# LETTURA CSV ROBUSTA
 # -------------------------
-try:
-    df = pd.read_csv(uploaded_file, sep=None, engine="python")
-except Exception:
-    st.error("Errore nella lettura del CSV")
+df = None
+read_errors = []
+
+for encoding in ["utf-8", "latin1", "cp1252"]:
+    for sep in [";", ","]:
+        try:
+            df = pd.read_csv(uploaded_file, encoding=encoding, sep=sep)
+            if df.shape[1] > 1:
+                break
+        except Exception as e:
+            read_errors.append(str(e))
+    if df is not None and df.shape[1] > 1:
+        break
+
+if df is None or df.shape[1] <= 1:
+    st.error("❌ Impossibile leggere il CSV bancario")
+    st.write("Suggerimento: assicurati che sia un vero CSV (non Excel).")
     st.stop()
 
 df.columns = [c.strip() for c in df.columns]
 
 # -------------------------
-# RICONOSCIMENTO COLONNA VALORE
+# COLONNA VALORE
 # -------------------------
 possible_value_cols = [
     "Valore",
@@ -79,14 +87,10 @@ possible_value_cols = [
     "Valore (€)"
 ]
 
-value_col = None
-for col in possible_value_cols:
-    if col in df.columns:
-        value_col = col
-        break
+value_col = next((c for c in possible_value_cols if c in df.columns), None)
 
 if value_col is None:
-    st.error("❌ Colonna valore non trovata nel CSV")
+    st.error("❌ Colonna valore non trovata")
     st.write("Colonne disponibili:", list(df.columns))
     st.stop()
 
@@ -95,11 +99,12 @@ df["Valore"] = (
     .astype(str)
     .str.replace(".", "", regex=False)
     .str.replace(",", ".", regex=False)
+    .str.replace("€", "", regex=False)
     .astype(float)
 )
 
 # -------------------------
-# RICONOSCIMENTO STRUMENTO
+# COLONNA STRUMENTO
 # -------------------------
 possible_name_cols = [
     "Strumento",
@@ -109,64 +114,48 @@ possible_name_cols = [
     "ISIN"
 ]
 
-name_col = None
-for col in possible_name_cols:
-    if col in df.columns:
-        name_col = col
-        break
+name_col = next((c for c in possible_name_cols if c in df.columns), None)
 
-if name_col is None:
-    df["Strumento"] = "Non specificato"
-else:
-    df["Strumento"] = df[name_col]
+df["Strumento"] = df[name_col] if name_col else "Non specificato"
 
 # -------------------------
-# METRICHE PRINCIPALI
+# METRICHE
 # -------------------------
 totale = df["Valore"].sum()
-num_strumenti = df.shape[0]
 
-col1, col2 = st.columns(2)
-col1.metric("💰 Valore totale portafoglio", f"{totale:,.2f} €")
-col2.metric("📦 Numero strumenti", num_strumenti)
+c1, c2 = st.columns(2)
+c1.metric("💰 Valore totale", f"{totale:,.2f} €")
+c2.metric("📦 Numero strumenti", len(df))
 
 # -------------------------
 # ALLOCAZIONE
 # -------------------------
-alloc = (
-    df.groupby("Strumento")["Valore"]
-    .sum()
-    .sort_values(ascending=False)
-)
+alloc = df.groupby("Strumento")["Valore"].sum().sort_values(ascending=False)
 
-st.subheader("📌 Allocazione per strumento")
+st.subheader("📊 Allocazione per strumento")
 st.bar_chart(alloc)
 
 # -------------------------
-# TABELLA DETTAGLIO
+# TABELLA
 # -------------------------
-st.subheader("📋 Dettaglio portafoglio")
+st.subheader("📋 Dettaglio")
 st.dataframe(
-    df[[ "Strumento", "Valore" ]]
-    .sort_values("Valore", ascending=False),
+    df[["Strumento", "Valore"]].sort_values("Valore", ascending=False),
     use_container_width=True
 )
 
 # -------------------------
-# ALERT BASE
+# ALERT
 # -------------------------
-st.subheader("⚠️ Alert automatici")
+st.subheader("⚠️ Alert")
 
-max_weight = alloc.max() / totale
+peso_max = alloc.max() / totale
 
-if max_weight > 0.25:
-    st.error("🚨 Concentrazione elevata: uno strumento >25% del portafoglio (5★ URGENTE)")
-elif max_weight > 0.15:
-    st.warning("⚠️ Concentrazione significativa >15% (3★ IMPORTANTE)")
+if peso_max > 0.25:
+    st.error("🚨 Concentrazione >25% (5★ URGENTE)")
+elif peso_max > 0.15:
+    st.warning("⚠️ Concentrazione >15% (3★ IMPORTANTE)")
 else:
-    st.success("✅ Nessuna concentrazione critica")
+    st.success("✅ Allocazione equilibrata")
 
-# -------------------------
-# FOOTER
-# -------------------------
-st.caption("Portfolio Monitor PRO – versione cloud")
+st.caption("Portfolio Monitor PRO – cloud edition")
